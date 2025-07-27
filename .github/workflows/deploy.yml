@@ -2,46 +2,106 @@ name: deploy to dockerHub
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
-
+env:
+  REGISTRY: ghcr.io
+  
 jobs:
 
   build:
 
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: 'Get Previous tag'
         id: previoustag
         uses: "WyriHaximus/github-action-get-previous-tag@v1"
+        with:
+          fallback: vmain
       - name: Set up JDK 17
-        uses: actions/setup-java@v2
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'temurin'
-          cache: maven
+          distribution: 'oracle'
+          # cache: 'maven'
       - name: replace version
         run: ver=${{ steps.previoustag.outputs.tag }} && new_ver=${ver:1} && sed -i "s/SONIC_VERSION/${new_ver}/g" pom.xml
-      - name: login docker hub
-        run: echo "${{ secrets.ACCESS_TOKEN }}" | docker login -u zhouyixun --password-stdin
       - name: Validate and Compile with Maven
         run: mvn package -Dmaven.test.skip=true
-      - name: deploy controller
-        run: docker build -t sonicorg/sonic-server-controller:${{ steps.previoustag.outputs.tag }} -f sonic-server-controller/src/main/docker/Dockerfile .
-      - name: push controller
-        run: docker push sonicorg/sonic-server-controller:${{ steps.previoustag.outputs.tag }}
-      - name: deploy eureka
-        run: docker build -t sonicorg/sonic-server-eureka:${{ steps.previoustag.outputs.tag }} -f sonic-server-eureka/src/main/docker/Dockerfile .
-      - name: push eureka
-        run: docker push sonicorg/sonic-server-eureka:${{ steps.previoustag.outputs.tag }}
-      - name: deploy gateway
-        run: docker build -t sonicorg/sonic-server-gateway:${{ steps.previoustag.outputs.tag }} -f sonic-server-gateway/src/main/docker/Dockerfile .
-      - name: push gateway
-        run: docker push sonicorg/sonic-server-gateway:${{ steps.previoustag.outputs.tag }}
-      - name: deploy folder
-        run: docker build -t sonicorg/sonic-server-folder:${{ steps.previoustag.outputs.tag }} -f sonic-server-folder/src/main/docker/Dockerfile .
-      - name: push folder
-        run: docker push sonicorg/sonic-server-folder:${{ steps.previoustag.outputs.tag }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        # Uses the `docker/login-action` action to log in to the Container registry registry using the account and password that will publish the packages. Once published, the packages are scoped to the account defined here.
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        # This step uses [docker/metadata-action](https://github.com/docker/metadata-action#about) to extract tags and labels that will be applied to the specified image. The `id` "meta" allows the output of this step to be referenced in a subsequent step. The `images` value provides the base name for the tags and labels.
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta-controller
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.actor }}/sonic-server-controller
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta-eureka
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.actor }}/sonic-server-eureka
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta-gateway
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.actor }}/sonic-server-gateway
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta-folder
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.actor }}/sonic-server-folder
+      - run: cp sonic-server-controller/target/sonic-server-controller.jar sonic-server-controller/src/main/docker/
+      - run: cp sonic-server-eureka/target/sonic-server-eureka.jar sonic-server-eureka/src/main/docker/
+      - run: cp sonic-server-gateway/target/sonic-server-gateway.jar sonic-server-gateway/src/main/docker/
+      - run: cp sonic-server-folder/target/sonic-server-folder.jar sonic-server-folder/src/main/docker/
+      - name: Build and push Docker image
+        id: push-controller
+        uses: docker/build-push-action@v6
+        with:
+          context: sonic-server-controller/src/main/docker/
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-controller.outputs.tags }}
+          labels: ${{ steps.meta-controller.outputs.labels }}
+      - name: Build and push Docker image
+        id: push-eureka
+        uses: docker/build-push-action@v6
+        with:
+          context: sonic-server-eureka/src/main/docker/
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-eureka.outputs.tags }}
+          labels: ${{ steps.meta-eureka.outputs.labels }}
+      - name: Build and push Docker image
+        id: push-gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: sonic-server-gateway/src/main/docker/
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-gateway.outputs.tags }}
+          labels: ${{ steps.meta-gateway.outputs.labels }}
+      - name: Build and push Docker image
+        id: push-folder
+        uses: docker/build-push-action@v6
+        with:
+          context: sonic-server-folder/src/main/docker/
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-folder.outputs.tags }}
+          labels: ${{ steps.meta-folder.outputs.labels }}
